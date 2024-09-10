@@ -2,45 +2,45 @@ package torrent
 
 import (
 	"crypto/rand"
-	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/url"
+	"ra3d/peers"
 	"strconv"
 	"time"
+
+	"github.com/jackpal/bencode-go"
 )
 
 type Tracker struct {
 	Type string
-	File BencodeFile
+	File TorrentFile
 }
 
-type Peer struct {
-	IP   net.IP
-	Port uint16
-}
-
-func (tr *Tracker) DownloadToFile() error {
+func (tr *Tracker) DownloadToFile() ([]byte, error) {
 	var peerId [20]byte
 	_, err := rand.Read(peerId[:])
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = tr.GetPeers(string(peerId[:]), 6881)
+	peers, err := tr.GetPeers(string(peerId[:]), 6881)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	torrent := Torrent{
+		Peers: peers,
+		File:  tr.File,
+	}
+
+	return torrent.Download()
+
 }
 
 func (tr *Tracker) buildTrackingURL(peerId string, port int) (string, error) {
-	base, err := url.Parse(tr.File.TrackerURL)
+	base, err := url.Parse(tr.File.Announce)
 	if err != nil {
 		return "", err
 	}
-  fmt.Println("info hash", tr.File.InfoHash)
 	params := url.Values{
 		"peer_id":    []string{peerId},
 		"info_hash":  []string{tr.File.InfoHash},
@@ -54,28 +54,23 @@ func (tr *Tracker) buildTrackingURL(peerId string, port int) (string, error) {
 	return base.String(), nil
 }
 
-func (tr *Tracker) GetPeers(peerId string, port int) ([]Peer, error) {
+func (tr *Tracker) GetPeers(peerId string, port int) ([]peers.Peer, error) {
 	trackerURL, err := tr.buildTrackingURL(peerId, port)
 	if err != nil {
-		return []Peer{}, err
+		return []peers.Peer{}, err
 	}
 
-	fmt.Println("tracker url", trackerURL)
 	c := &http.Client{Timeout: 15 * time.Second}
 	resp, err := c.Get(trackerURL)
 	if err != nil {
 		return nil, err
 	}
-	// defer resp.Body.Close()
-	fmt.Println("status is", resp.StatusCode)
-	body, err := io.ReadAll(resp.Body)
+
+	trackerResp := bencodeTrackerResp{}
+	err = bencode.Unmarshal(resp.Body, &trackerResp)
 	if err != nil {
-		return []Peer{}, err
+		return nil, err
 	}
-	//Convert the body to type string
-	sb := string(body)
-  fmt.Println("body is", sb)
 
-
-	return []Peer{}, nil
+	return peers.Unmarshal([]byte(trackerResp.Peers))
 }
