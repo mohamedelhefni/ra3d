@@ -1,4 +1,4 @@
-package peers
+package torrent
 
 import (
 	"encoding/binary"
@@ -12,7 +12,7 @@ type Peer struct {
 	Port uint16
 }
 
-func Unmarshal(peersBin []byte) ([]Peer, error) {
+func UnmarshalPeers(peersBin []byte) ([]Peer, error) {
 	const peerSize = 6 // 4 for IP, 2 for port
 	numPeers := len(peersBin) / peerSize
 	if len(peersBin)%peerSize != 0 {

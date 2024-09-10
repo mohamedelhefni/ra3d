@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"net/http"
 	"net/url"
-	"ra3d/peers"
 	"strconv"
 	"time"
 
@@ -54,10 +53,10 @@ func (tr *Tracker) buildTrackingURL(peerId string, port int) (string, error) {
 	return base.String(), nil
 }
 
-func (tr *Tracker) GetPeers(peerId string, port int) ([]peers.Peer, error) {
+func (tr *Tracker) GetPeers(peerId string, port int) ([]Peer, error) {
 	trackerURL, err := tr.buildTrackingURL(peerId, port)
 	if err != nil {
-		return []peers.Peer{}, err
+		return []Peer{}, err
 	}
 
 	c := &http.Client{Timeout: 15 * time.Second}
@@ -72,5 +71,5 @@ func (tr *Tracker) GetPeers(peerId string, port int) ([]peers.Peer, error) {
 		return nil, err
 	}
 
-	return peers.Unmarshal([]byte(trackerResp.Peers))
+	return Unmarshal([]byte(trackerResp.Peers))
 }
