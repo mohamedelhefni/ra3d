@@ -35,7 +35,7 @@ func (bi *bencodeInfo) splitHashes() ([]string, error) {
 	numHashes := len(buf) / hashLen
 	hashes := make([]string, numHashes)
 	for i := 0; i < numHashes; i++ {
-		hashes[i] = string(buf[i*hashLen : (i+1)*hashLen])
+		hashes[i] = string(buf[i*hashLen : (i+1)*hashLen][:])
 	}
 	return hashes, nil
 }

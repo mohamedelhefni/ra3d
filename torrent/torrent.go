@@ -52,15 +52,30 @@ func (tf *TorrentFile) Open(path string) error {
 		return err
 	}
 	tf.PieceHashes = hashes
+	tf.PieceLength = bencodedTorrent.Info.PieceLength
 	return nil
 }
 
-func (tf *TorrentFile) DownloadToFile() ([]byte, error) {
+func (tf *TorrentFile) DownloadToFile(outpath string) error {
 	tracker := Tracker{
 		Type: "file",
 		File: *tf,
 	}
-	return tracker.DownloadToFile()
+	buf, err := tracker.DownloadToFile()
+	if err != nil {
+		return err
+	}
+
+	outFile, err := os.Create(outpath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+	_, err = outFile.Write(buf)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // magnet:?xt=urn:btih:DPIIR3URM2QGFT2K6COPTFZA7JXBUMJT&dn=debian-12.7.0-amd64-netinst.iso&xl=661651456&tr=http%3A%2F%2Fbttracker.debian.org%3A6969%2Fannounce

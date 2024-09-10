@@ -2,6 +2,7 @@ package torrent
 
 import (
 	"crypto/rand"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -25,10 +26,12 @@ func (tr *Tracker) DownloadToFile() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	fmt.Println("peers are", peers)
 
 	torrent := Torrent{
-		Peers: peers,
-		File:  tr.File,
+		PeerID: string(peerId[:]),
+		Peers:  peers,
+		File:   tr.File,
 	}
 
 	return torrent.Download()
@@ -58,7 +61,7 @@ func (tr *Tracker) GetPeers(peerId string, port int) ([]Peer, error) {
 	if err != nil {
 		return []Peer{}, err
 	}
-
+	fmt.Println("tracker ur", trackerURL)
 	c := &http.Client{Timeout: 15 * time.Second}
 	resp, err := c.Get(trackerURL)
 	if err != nil {
@@ -71,5 +74,5 @@ func (tr *Tracker) GetPeers(peerId string, port int) ([]Peer, error) {
 		return nil, err
 	}
 
-	return Unmarshal([]byte(trackerResp.Peers))
+	return UnmarshalPeers([]byte(trackerResp.Peers))
 }

@@ -11,7 +11,7 @@ func main() {
 		panic(err)
 	}
 
-	_, err = bencodeTorrent.DownloadToFile()
+	err = bencodeTorrent.DownloadToFile("./debain.iso")
 	if err != nil {
 		panic(err)
 	}
