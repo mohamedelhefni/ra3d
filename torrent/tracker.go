@@ -2,10 +2,10 @@ package torrent
 
 import (
 	"crypto/rand"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"ra3d/tui"
 	"strconv"
 	"strings"
 	"time"
@@ -16,25 +16,30 @@ type Tracker struct {
 	File TorrentFile
 }
 
-func (tr *Tracker) DownloadToFile() ([]byte, error) {
+func (tr *Tracker) DownloadToFile(tuiCh chan tui.TorrentTui) ([]byte, error) {
 	var peerId [20]byte
 	_, err := rand.Read(peerId[:])
 	if err != nil {
 		return nil, err
 	}
+	tuiCh <- tui.TorrentTui{
+		DisplayName: tr.File.DisplayName,
+	}
 	peers, err := tr.GetPeers(string(peerId[:]), 6881)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("peers are", peers)
-
+	tuiCh <- tui.TorrentTui{
+		DisplayName: tr.File.DisplayName,
+		Peers:       len(peers),
+	}
 	torrent := Torrent{
 		PeerID: string(peerId[:]),
 		Peers:  peers,
 		File:   tr.File,
 	}
 
-	return torrent.Download()
+	return torrent.Download(tuiCh)
 
 }
 

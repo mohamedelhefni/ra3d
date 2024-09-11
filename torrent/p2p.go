@@ -3,7 +3,7 @@ package torrent
 import (
 	"crypto/sha1"
 	"fmt"
-	"log"
+	"ra3d/tui"
 	"runtime"
 	"time"
 )
@@ -122,11 +122,11 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 func (t *Torrent) startDownloadWorker(peer Peer, workQueue chan *pieceWork, results chan *pieceResult) {
 	c, err := NewClient(peer, t.PeerID, t.File.InfoHash)
 	if err != nil {
-		log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
+		// log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
 		return
 	}
 	defer c.Conn.Close()
-	log.Printf("Completed handshake with %s\n", peer.IP)
+	// log.Printf("Completed handshake with %s\n", peer.IP)
 
 	c.SendUnchoke()
 	c.SendInterested()
@@ -140,13 +140,13 @@ func (t *Torrent) startDownloadWorker(peer Peer, workQueue chan *pieceWork, resu
 		// Download the piece
 		buf, err := attemptDownloadPiece(c, pw)
 		if err != nil {
-			log.Println("Exiting", err)
+			// log.Println("Exiting", err)
 			workQueue <- pw // Put piece back on the queue
 			return
 		}
 		err = checkIntegrity(pw, buf)
 		if err != nil {
-			log.Printf("Piece #%d failed integrity check\n", pw.index)
+			// log.Printf("Piece #%d failed integrity check\n", pw.index)
 			workQueue <- pw // Put piece back on the queue
 			continue
 		}
@@ -171,8 +171,8 @@ func (t *Torrent) calculatePieceSize(index int) int {
 }
 
 // Download downloads the torrent. This stores the entire file in memory.
-func (t *Torrent) Download() ([]byte, error) {
-	log.Println("Starting download for", t.File.DisplayName)
+func (t *Torrent) Download(tuiCh chan tui.TorrentTui) ([]byte, error) {
+	// log.Println("Starting download for", t.File.DisplayName)
 	// Init queues for workers to retrieve work and send results
 	workQueue := make(chan *pieceWork, len(t.File.PieceHashes))
 	results := make(chan *pieceResult)
@@ -181,7 +181,7 @@ func (t *Torrent) Download() ([]byte, error) {
 		workQueue <- &pieceWork{index, hash, length}
 	}
 
-	fmt.Println("peers are", len(t.Peers))
+	// fmt.Println("peers are", len(t.Peers))
 	if len(t.Peers) == 0 {
 		return nil, fmt.Errorf("the are no peers ")
 	}
@@ -200,7 +200,13 @@ func (t *Torrent) Download() ([]byte, error) {
 
 		percent := float64(donePieces) / float64(len(t.File.PieceHashes)) * 100
 		numWorkers := runtime.NumGoroutine() - 1 // subtract 1 for main thread
-		log.Printf("(%0.2f%%) Downloaded piece #%d from %d peers\n", percent, res.index, numWorkers)
+		tuiCh <- tui.TorrentTui{
+			DisplayName: t.File.DisplayName,
+			Peers:       numWorkers,
+			Percentage:  int(percent),
+		}
+
+		// log.Printf("(%0.2f%%) Downloaded piece #%d from %d peers\n", percent, res.index, numWorkers)
 	}
 	close(workQueue)
 

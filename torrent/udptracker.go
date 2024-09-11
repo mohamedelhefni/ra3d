@@ -59,14 +59,13 @@ func udpConnect(conn net.Conn) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	fmt.Println("write conn", connectReq)
 
 	connectResp := make([]byte, 16)
 	_, err = conn.Read(connectResp)
 	if err != nil {
 		return 0, err
 	}
-	fmt.Println("resp ", connectResp)
+	// fmt.Println("resp ", connectResp)
 	conn.SetDeadline(time.Time{})
 	if binary.BigEndian.Uint32(connectResp[0:4]) != 0 {
 		return 0, errors.New("connect response action is not 0")
@@ -82,7 +81,7 @@ func udpConnect(conn net.Conn) (uint64, error) {
 func udpAnnounce(conn net.Conn, connectionID uint64, infoHash []byte, peerID [20]byte, totalLength int) (*UDPTrackerResponse, error) {
 	transactionID := genTransactionID()
 
-	fmt.Println("start udp announce")
+	// fmt.Println("start udp announce")
 	announceReq := make([]byte, 98)
 	binary.BigEndian.PutUint64(announceReq[0:8], connectionID)
 	binary.BigEndian.PutUint32(announceReq[8:12], announceAction)
@@ -103,7 +102,7 @@ func udpAnnounce(conn net.Conn, connectionID uint64, infoHash []byte, peerID [20
 	if err != nil {
 		return nil, fmt.Errorf("failed to send announce request: %v", err)
 	}
-	fmt.Println("announceReq sent:", announceReq)
+	// fmt.Println("announceReq sent:", announceReq)
 
 	// Read the full response
 	respBuffer := make([]byte, 1024)
@@ -118,7 +117,7 @@ func udpAnnounce(conn net.Conn, connectionID uint64, infoHash []byte, peerID [20
 	}
 
 	announceResp := respBuffer[:20]
-	fmt.Println("announceResp:", announceResp)
+	// fmt.Println("announceResp:", announceResp)
 
 	if binary.BigEndian.Uint32(announceResp[0:4]) != 1 {
 		return nil, errors.New("announce response action is not 1")

@@ -87,7 +87,6 @@ func parseNonCompactPeers(data []interface{}) []Peer {
 }
 
 func UnmarshalPeers(peersBin []byte) ([]Peer, error) {
-	fmt.Println("peers are", peersBin)
 	const peerSize = 6 // 4 for IP, 2 for port
 	numPeers := len(peersBin) / peerSize
 	if len(peersBin)%peerSize != 0 {

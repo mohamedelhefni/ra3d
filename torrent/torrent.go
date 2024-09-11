@@ -2,6 +2,7 @@ package torrent
 
 import (
 	"os"
+	"ra3d/tui"
 
 	"github.com/jackpal/bencode-go"
 )
@@ -58,17 +59,17 @@ func (tf *TorrentFile) Open(path string) error {
 	return nil
 }
 
-func (tf *TorrentFile) DownloadToFile(outpath string) error {
+func (tf *TorrentFile) DownloadToFile(tuiChan chan tui.TorrentTui) error {
 	tracker := Tracker{
 		Type: "file",
 		File: *tf,
 	}
-	buf, err := tracker.DownloadToFile()
+	buf, err := tracker.DownloadToFile(tuiChan)
 	if err != nil {
 		return err
 	}
 
-	outFile, err := os.Create(outpath)
+	outFile, err := os.Create(tf.DisplayName)
 	if err != nil {
 		return err
 	}
