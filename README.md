@@ -1,5 +1,5 @@
 # Ra3d
-![./ra3d.gif](Demo)
+![./ra3d.gif](./ra3d.gif)
 A simple torrent client written in GO
 
 ## Features
