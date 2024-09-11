@@ -3,12 +3,11 @@ package torrent
 import (
 	"crypto/rand"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
-
-	"github.com/jackpal/bencode-go"
 )
 
 type Tracker struct {
@@ -61,18 +60,21 @@ func (tr *Tracker) GetPeers(peerId string, port int) ([]Peer, error) {
 	if err != nil {
 		return []Peer{}, err
 	}
-	fmt.Println("tracker ur", trackerURL)
 	c := &http.Client{Timeout: 15 * time.Second}
 	resp, err := c.Get(trackerURL)
 	if err != nil {
 		return nil, err
 	}
 
-	trackerResp := bencodeTrackerResp{}
-	err = bencode.Unmarshal(resp.Body, &trackerResp)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	return UnmarshalPeers([]byte(trackerResp.Peers))
+	trackerResp, err := CustomUnmarshalBencode(body)
+	if err != nil {
+		return nil, err
+	}
+
+	return trackerResp.Peers.([]Peer), nil
 }

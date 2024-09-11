@@ -15,8 +15,14 @@ type Bencode interface {
 }
 
 type bencodeTrackerResp struct {
-	Interval int    `bencode:"interval"`
-	Peers    string `bencode:"peers"`
+	Interval int         `bencode:"interval"`
+	Peers    interface{} `bencode:"peers"`
+}
+
+type PeerResp struct {
+	IP     string `bencode:"ip"`
+	PeerID string `bencode:"peer id"`
+	Port   int    `bencode:"port"`
 }
 
 type TorrentFile struct {
