@@ -1,10 +1,12 @@
 package torrent
 
 import (
+	"crypto/rand"
 	"crypto/sha1"
 	"fmt"
-	"ra3d/tui"
-	"runtime"
+	"slices"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,10 +16,34 @@ const MaxBlockSize = 16384
 // MaxBacklog is the number of unfulfilled requests a client can have in its pipeline
 const MaxBacklog = 5
 
+// reannounceEvery is how often trackers are asked for fresh peers.
+const reannounceEvery = time.Minute
+
+// Stats is a snapshot of a download's progress.
+type Stats struct {
+	Name       string
+	Status     string
+	Length     int
+	Downloaded int // bytes in verified pieces
+	Fetched    int // bytes downloaded from peers this run
+	Pieces     Bitfield
+	NumPieces  int
+	DonePieces int
+	Peers      int // connected peers
+	KnownPeers int
+	Done       bool
+	Err        error
+}
+
+// Torrent downloads one torrent. Call Run, and poll Stats from elsewhere.
 type Torrent struct {
 	PeerID string
-	Peers  []Peer
 	File   TorrentFile
+
+	mu     sync.Mutex
+	stats  Stats
+	store  *storage
+	active map[string]bool // peers with a running worker
 }
 
 type pieceWork struct {
@@ -28,7 +54,7 @@ type pieceWork struct {
 
 type pieceResult struct {
 	index int
-	buf   []byte
+	err   error
 }
 
 type pieceProgress struct {
@@ -45,31 +71,16 @@ func (state *pieceProgress) readMessage() error {
 	if err != nil {
 		return err
 	}
-
-	if msg == nil { // keep-alive
-		return nil
-	}
-
-	switch msg.ID {
-	case MsgUnchoke:
-		state.client.Choked = false
-	case MsgChoke:
-		state.client.Choked = true
-	case MsgHave:
-		index, err := ParseHave(msg)
-		if err != nil {
-			return err
-		}
-		state.client.Bitfield.SetPiece(index)
-	case MsgPiece:
+	if msg != nil && msg.ID == MsgPiece {
 		n, err := ParsePiece(state.index, state.buf, msg)
 		if err != nil {
 			return err
 		}
 		state.downloaded += n
 		state.backlog--
+		return nil
 	}
-	return nil
+	return state.client.handle(msg)
 }
 
 func attemptDownloadPiece(c *Client, pw *pieceWork) ([]byte, error) {
@@ -120,39 +131,44 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 }
 
 func (t *Torrent) startDownloadWorker(peer Peer, workQueue chan *pieceWork, results chan *pieceResult) {
-	c, err := NewClient(peer, t.PeerID, t.File.InfoHash)
+	c, err := NewClient(peer, t.PeerID, t.File.InfoHash, len(t.File.PieceHashes))
 	if err != nil {
-		// log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
 		return
 	}
 	defer c.Conn.Close()
-	// log.Printf("Completed handshake with %s\n", peer.IP)
+	t.update(func(s *Stats) { s.Peers++ })
+	defer t.update(func(s *Stats) { s.Peers-- })
 
 	c.SendUnchoke()
 	c.SendInterested()
 
+	skipped := 0
 	for pw := range workQueue {
 		if !c.Bitfield.HasPiece(pw.index) {
 			workQueue <- pw // Put piece back on the queue
+			// Only pieces this peer lacks are left; don't spin on them.
+			if skipped++; skipped > len(workQueue) {
+				time.Sleep(time.Second)
+				skipped = 0
+			}
 			continue
 		}
+		skipped = 0
 
-		// Download the piece
 		buf, err := attemptDownloadPiece(c, pw)
 		if err != nil {
-			// log.Println("Exiting", err)
 			workQueue <- pw // Put piece back on the queue
 			return
 		}
-		err = checkIntegrity(pw, buf)
-		if err != nil {
-			// log.Printf("Piece #%d failed integrity check\n", pw.index)
+		if checkIntegrity(pw, buf) != nil {
 			workQueue <- pw // Put piece back on the queue
 			continue
 		}
 
+		begin, _ := t.calculateBoundsForPiece(pw.index)
+		err = t.store.WriteAt(buf, begin)
 		c.SendHave(pw.index)
-		results <- &pieceResult{pw.index, buf}
+		results <- &pieceResult{pw.index, err}
 	}
 }
 
@@ -170,45 +186,161 @@ func (t *Torrent) calculatePieceSize(index int) int {
 	return end - begin
 }
 
-// Download downloads the torrent. This stores the entire file in memory.
-func (t *Torrent) Download(tuiCh chan tui.TorrentTui) ([]byte, error) {
-	// log.Println("Starting download for", t.File.DisplayName)
-	// Init queues for workers to retrieve work and send results
-	workQueue := make(chan *pieceWork, len(t.File.PieceHashes))
-	results := make(chan *pieceResult)
-	for index, hash := range t.File.PieceHashes {
-		length := t.calculatePieceSize(index)
-		workQueue <- &pieceWork{index, hash, length}
-	}
+// Stats returns a snapshot of the download's progress. Safe to call concurrently with Run.
+func (t *Torrent) Stats() Stats {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s := t.stats
+	s.Pieces = slices.Clone(s.Pieces)
+	return s
+}
 
-	// fmt.Println("peers are", len(t.Peers))
-	if len(t.Peers) == 0 {
-		return nil, fmt.Errorf("the are no peers ")
-	}
-	// Start workers
-	for _, peer := range t.Peers {
-		go t.startDownloadWorker(peer, workQueue, results)
-	}
-	// Collect results into a buffer until full
-	buf := make([]byte, t.File.Length)
-	donePieces := 0
-	for donePieces < len(t.File.PieceHashes) {
-		res := <-results
-		begin, end := t.calculateBoundsForPiece(res.index)
-		copy(buf[begin:end], res.buf)
-		donePieces++
+func (t *Torrent) update(fn func(*Stats)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	fn(&t.stats)
+}
 
-		percent := float64(donePieces) / float64(len(t.File.PieceHashes)) * 100
-		numWorkers := runtime.NumGoroutine() - 1 // subtract 1 for main thread
-		tuiCh <- tui.TorrentTui{
-			DisplayName: t.File.DisplayName,
-			Peers:       numWorkers,
-			Percentage:  int(percent),
+func (t *Torrent) setStatus(status string) {
+	t.update(func(s *Stats) { s.Status = status })
+}
+
+func (t *Torrent) pieceDone(index int) {
+	size := t.calculatePieceSize(index)
+	t.update(func(s *Stats) {
+		s.Pieces.SetPiece(index)
+		s.DonePieces++
+		s.Downloaded += size
+	})
+}
+
+// Run downloads source (a .torrent path or magnet link) into outDir.
+// Data already on disk is verified and kept, so an interrupted download resumes.
+func (t *Torrent) Run(source, outDir string) error {
+	err := t.run(source, outDir)
+	t.update(func(s *Stats) {
+		s.Err = err
+		s.Done = err == nil
+		if s.Done {
+			s.Status = "Done"
 		}
+	})
+	return err
+}
 
-		// log.Printf("(%0.2f%%) Downloaded piece #%d from %d peers\n", percent, res.index, numWorkers)
+func (t *Torrent) run(source, outDir string) error {
+	id := make([]byte, 12)
+	rand.Read(id)
+	t.PeerID = "-RA0001-" + string(id)
+
+	if strings.HasPrefix(source, "magnet:") {
+		tf, err := ParseMagnet(source)
+		if err != nil {
+			return err
+		}
+		t.File = tf
+		t.update(func(s *Stats) { s.Name = tf.DisplayName })
+		if err := t.fetchMetadata(); err != nil {
+			return err
+		}
+	} else if err := t.File.Open(source); err != nil {
+		return err
+	}
+
+	n := len(t.File.PieceHashes)
+	t.update(func(s *Stats) {
+		s.Name = t.File.DisplayName
+		s.Length = t.File.Length
+		s.NumPieces = n
+		s.Pieces = make(Bitfield, (n+7)/8)
+	})
+
+	store, existing, err := openStorage(outDir, &t.File)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	t.store = store
+
+	var work []*pieceWork
+	buf := make([]byte, t.File.PieceLength)
+	for i, hash := range t.File.PieceHashes {
+		pw := &pieceWork{i, hash, t.calculatePieceSize(i)}
+		if existing {
+			if i%64 == 0 {
+				t.setStatus(fmt.Sprintf("Checking existing data %d%%", i*100/n))
+			}
+			begin, _ := t.calculateBoundsForPiece(i)
+			if err := store.ReadAt(buf[:pw.length], begin); err != nil {
+				return err
+			}
+			if checkIntegrity(pw, buf[:pw.length]) == nil {
+				t.pieceDone(i)
+				continue
+			}
+		}
+		work = append(work, pw)
+	}
+	if len(work) == 0 {
+		return nil
+	}
+	return t.download(work)
+}
+
+func (t *Torrent) download(work []*pieceWork) error {
+	workQueue := make(chan *pieceWork, len(work))
+	for _, pw := range work {
+		workQueue <- pw
+	}
+	results := make(chan *pieceResult)
+	peersCh := make(chan []Peer)
+	t.active = map[string]bool{}
+
+	announce := time.NewTimer(0)
+	for remaining := len(work); remaining > 0; {
+		select {
+		case <-announce.C:
+			t.setStatus("Asking trackers for peers")
+			left := t.File.Length - t.Stats().Downloaded
+			go func() { peersCh <- t.announce(left) }()
+
+		case peers := <-peersCh:
+			t.update(func(s *Stats) { s.KnownPeers = len(peers) })
+			t.setStatus("Downloading")
+			if len(peers) == 0 {
+				t.setStatus("No peers found, retrying")
+			}
+			for _, peer := range peers {
+				t.startWorker(peer, workQueue, results)
+			}
+			announce.Reset(reannounceEvery)
+
+		case res := <-results:
+			if res.err != nil {
+				return fmt.Errorf("writing piece %d: %w", res.index, res.err)
+			}
+			t.pieceDone(res.index)
+			t.update(func(s *Stats) { s.Fetched += t.calculatePieceSize(res.index) })
+			remaining--
+		}
 	}
 	close(workQueue)
+	return nil
+}
 
-	return buf, nil
+// startWorker starts a download worker for peer unless one is already running.
+func (t *Torrent) startWorker(peer Peer, workQueue chan *pieceWork, results chan *pieceResult) {
+	key := peer.String()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.active[key] {
+		return
+	}
+	t.active[key] = true
+	go func() {
+		t.startDownloadWorker(peer, workQueue, results)
+		t.mu.Lock()
+		delete(t.active, key) // allow a reconnect on the next announce
+		t.mu.Unlock()
+	}()
 }
