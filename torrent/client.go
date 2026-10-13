@@ -35,29 +35,9 @@ func completeHandshake(conn net.Conn, infohash, peerID string) (*Handshake, erro
 	return res, nil
 }
 
-func recvBitfield(conn net.Conn) (Bitfield, error) {
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	defer conn.SetDeadline(time.Time{}) // Disable the deadline
-
-	msg, err := Read(conn)
-	if err != nil {
-		return nil, err
-	}
-	if msg == nil {
-		err := fmt.Errorf("Expected bitfield but got %s", msg)
-		return nil, err
-	}
-	if msg.ID != MsgBitfield {
-		err := fmt.Errorf("Expected bitfield but got ID %d", msg.ID)
-		return nil, err
-	}
-
-	return msg.Payload, nil
-}
-
 // NewClient connects with a peer, completes a handshake, and receives a handshake
 // returns an err if any of those fail.
-func NewClient(peer Peer, peerID, infoHash string) (*Client, error) {
+func NewClient(peer Peer, peerID, infoHash string, numPieces int) (*Client, error) {
 	conn, err := net.DialTimeout("tcp", peer.String(), 3*time.Second)
 	if err != nil {
 		return nil, err
@@ -69,20 +49,54 @@ func NewClient(peer Peer, peerID, infoHash string) (*Client, error) {
 		return nil, err
 	}
 
-	bf, err := recvBitfield(conn)
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-
-	return &Client{
+	c := &Client{
 		Conn:     conn,
 		Choked:   true,
-		Bitfield: bf,
+		Bitfield: make(Bitfield, (numPieces+7)/8),
 		peer:     peer,
 		infoHash: infoHash,
 		peerID:   peerID,
-	}, nil
+	}
+
+	// Wait until we know what the peer has. Most send a bitfield, possibly
+	// after an extended handshake; some send only HAVE messages.
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	defer conn.SetDeadline(time.Time{})
+	for {
+		msg, err := c.Read()
+		if err == nil {
+			err = c.handle(msg)
+		}
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		if msg != nil && (msg.ID == MsgBitfield || msg.ID == MsgHave) {
+			return c, nil
+		}
+	}
+}
+
+// handle applies a state-changing message (choke, have, bitfield) to the client.
+func (c *Client) handle(msg *Message) error {
+	if msg == nil { // keep-alive
+		return nil
+	}
+	switch msg.ID {
+	case MsgUnchoke:
+		c.Choked = false
+	case MsgChoke:
+		c.Choked = true
+	case MsgHave:
+		index, err := ParseHave(msg)
+		if err != nil {
+			return err
+		}
+		c.Bitfield.SetPiece(index)
+	case MsgBitfield:
+		copy(c.Bitfield, msg.Payload)
+	}
+	return nil
 }
 
 // Read reads and consumes a message from the connection

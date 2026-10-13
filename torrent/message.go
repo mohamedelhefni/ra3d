@@ -27,6 +27,8 @@ const (
 	MsgPiece messageID = 7
 	// MsgCancel cancels a request
 	MsgCancel messageID = 8
+	// MsgExtended carries extension protocol messages (BEP 10)
+	MsgExtended messageID = 20
 )
 
 // Message stores ID and payload of a message
@@ -153,6 +155,8 @@ func (m *Message) name() string {
 		return "Piece"
 	case MsgCancel:
 		return "Cancel"
+	case MsgExtended:
+		return "Extended"
 	default:
 		return fmt.Sprintf("Unknown#%d", m.ID)
 	}
