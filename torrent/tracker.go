@@ -1,98 +1,78 @@
 package torrent
 
 import (
-	"crypto/rand"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"ra3d/tui"
 	"strconv"
-	"strings"
+	"sync"
 	"time"
 )
 
-type Tracker struct {
-	Type string
-	File TorrentFile
+const listenPort = 6881
+
+var httpClient = &http.Client{Timeout: 15 * time.Second}
+
+// announce asks every tracker for peers concurrently and returns the union.
+func (t *Torrent) announce(left int) []Peer {
+	var (
+		mu    sync.Mutex
+		wg    sync.WaitGroup
+		seen  = map[string]bool{}
+		peers []Peer
+	)
+	for _, tr := range t.File.Trackers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ps, err := getPeers(tr, t.File.InfoHash, t.PeerID, left)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			for _, p := range ps {
+				if !seen[p.String()] {
+					seen[p.String()] = true
+					peers = append(peers, p)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	return peers
 }
 
-func (tr *Tracker) DownloadToFile(tuiCh chan tui.TorrentTui) ([]byte, error) {
-	var peerId [20]byte
-	_, err := rand.Read(peerId[:])
+func getPeers(announce, infoHash, peerID string, left int) ([]Peer, error) {
+	u, err := url.Parse(announce)
 	if err != nil {
 		return nil, err
 	}
-	tuiCh <- tui.TorrentTui{
-		DisplayName: tr.File.DisplayName,
-	}
-	peers, err := tr.GetPeers(string(peerId[:]), 6881)
-	if err != nil {
-		return nil, err
-	}
-	tuiCh <- tui.TorrentTui{
-		DisplayName: tr.File.DisplayName,
-		Peers:       len(peers),
-	}
-	torrent := Torrent{
-		PeerID: string(peerId[:]),
-		Peers:  peers,
-		File:   tr.File,
-	}
+	switch u.Scheme {
+	case "udp":
+		return udpTrackerRequest(u.Host, infoHash, peerID, left)
+	case "http", "https":
+		q := u.Query()
+		q.Set("peer_id", peerID)
+		q.Set("info_hash", infoHash)
+		q.Set("port", strconv.Itoa(listenPort))
+		q.Set("uploaded", "0")
+		q.Set("downloaded", "0")
+		q.Set("compact", "1")
+		q.Set("left", strconv.Itoa(left))
+		u.RawQuery = q.Encode()
 
-	return torrent.Download(tuiCh)
-
-}
-
-func (tr *Tracker) buildTrackingURL(peerId string, port int) (string, error) {
-	base, err := url.Parse(tr.File.Announce)
-	if err != nil {
-		return "", err
-	}
-	params := url.Values{
-		"peer_id":    []string{peerId},
-		"info_hash":  []string{tr.File.InfoHash},
-		"port":       []string{strconv.Itoa(port)},
-		"uploaded":   []string{"0"},
-		"downloaded": []string{"0"},
-		"compact":    []string{"1"},
-		"left":       []string{strconv.Itoa(tr.File.Length)},
-	}
-	base.RawQuery = params.Encode()
-	return base.String(), nil
-}
-
-func (tr *Tracker) GetPeers(peerId string, port int) ([]Peer, error) {
-	var peers []Peer
-	announceArr := strings.Split(tr.File.Announce, ":")
-	if announceArr[0] == "udp" {
-		var PeerID [20]byte
-		copy(PeerID[:], []byte(peerId))
-		res, err := udpTrackerRequest(tr.File.Announce, []byte(tr.File.InfoHash), PeerID, tr.File.Length)
+		resp, err := httpClient.Get(u.String())
 		if err != nil {
 			return nil, err
 		}
-		peers = res.Peers
-	} else {
-		trackerURL, err := tr.buildTrackingURL(peerId, port)
-		if err != nil {
-			return []Peer{}, err
-		}
-		c := &http.Client{Timeout: 15 * time.Second}
-		resp, err := c.Get(trackerURL)
+		defer resp.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		if err != nil {
 			return nil, err
 		}
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-
-		trackerResp, err := CustomUnmarshalBencode(body)
-		if err != nil {
-			return nil, err
-		}
-		peers = trackerResp.Peers.([]Peer)
+		return parseTrackerResponse(body)
 	}
-	return peers, nil
+	return nil, fmt.Errorf("unsupported tracker %q", announce)
 }
