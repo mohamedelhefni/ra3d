@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jackpal/bencode-go"
 )
@@ -102,5 +103,62 @@ func TestDecodeDictTrailingData(t *testing.T) {
 	d, rest, err := decodeDict([]byte("d8:msg_typei1e5:piecei0eeRAWDATA"))
 	if err != nil || d["msg_type"] != int64(1) || string(rest) != "RAWDATA" {
 		t.Fatalf("%v %q %v", d, rest, err)
+	}
+}
+
+func TestPauseResume(t *testing.T) {
+	tr := &Torrent{File: TorrentFile{Length: 8, PieceLength: 8, PieceHashes: []string{"x"}}}
+	go tr.download([]*pieceWork{{0, "x", 8}})
+	waitStatus := func(want func(string) bool) {
+		for range 100 {
+			if want(tr.Stats().Status) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("status stuck at %q", tr.Stats().Status)
+	}
+	tr.TogglePause()
+	waitStatus(func(s string) bool { return s == "Paused" })
+	tr.TogglePause()
+	waitStatus(func(s string) bool { return s != "Paused" })
+	if tr.Stats().Paused {
+		t.Fatal("still paused")
+	}
+}
+
+func TestStopAndDelete(t *testing.T) {
+	data := []byte("0123456789")
+	h := sha1.Sum(data)
+	info := map[string]interface{}{
+		"name": "dir", "piece length": 16, "pieces": string(h[:]),
+		"files": []interface{}{
+			map[string]interface{}{"length": 10, "path": []interface{}{"sub", "a.txt"}},
+		},
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "x.torrent")
+	var buf bytes.Buffer
+	bencode.Marshal(&buf, map[string]interface{}{"announce": "http://127.0.0.1:1/announce", "info": info})
+	os.WriteFile(src, buf.Bytes(), 0o644)
+
+	tr := &Torrent{}
+	out := filepath.Join(dir, "out")
+	errc := make(chan error)
+	go func() { errc <- tr.Run(src, out) }()
+	for tr.Stats().NumPieces == 0 && tr.Stats().Err == nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := tr.Delete(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errc; err != ErrStopped {
+		t.Fatalf("Run returned %v, want ErrStopped", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "dir")); !os.IsNotExist(err) {
+		t.Fatalf("torrent folder still there: %v", err)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("output dir itself was removed: %v", err)
 	}
 }

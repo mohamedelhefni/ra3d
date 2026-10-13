@@ -23,6 +23,9 @@ const maxMetadataSize = 16 << 20
 func (t *Torrent) fetchMetadata() error {
 	const attempts = 3
 	for attempt := 1; attempt <= attempts; attempt++ {
+		if t.stopped() {
+			return ErrStopped
+		}
 		t.setStatus(fmt.Sprintf("Finding peers (attempt %d/%d)", attempt, attempts))
 		peers := t.announce(1) // left=0 would make trackers treat us as a seeder
 		t.update(func(s *Stats) { s.KnownPeers = len(peers) })
@@ -43,8 +46,14 @@ func (t *Torrent) fetchMetadata() error {
 				return t.File.setInfo(raw)
 			}
 		}
-		if attempt < attempts {
-			time.Sleep(10 * time.Second)
+		if attempt == attempts {
+			break
+		}
+		_, stop, _ := t.chans()
+		select {
+		case <-stop:
+			return ErrStopped
+		case <-time.After(10 * time.Second):
 		}
 	}
 	return errors.New("could not fetch metadata from any peer")
