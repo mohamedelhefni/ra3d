@@ -18,10 +18,16 @@ go build -o ra3d .
 ## Usage
 
 ```sh
-./ra3d [-o dir] <file.torrent | magnet-link>
+./ra3d [-o dir] [-d] [file.torrent | magnet-link]...
 ```
 
-`-o` sets the folder to download into. It defaults to the current directory.
+`-o` sets the folder to download into. It defaults to the current directory. Run `./ra3d` alone to open the TUI and add torrents from there, or pass any number of torrents to start them right away.
+
+`-d` skips the TUI and logs one line as each download ends, so ra3d can run in the background:
+
+```sh
+nohup ./ra3d -d -o ~/Downloads a.torrent b.torrent > ra3d.log 2>&1 &
+```
 
 ```sh
 ./ra3d debain.torrent
@@ -31,11 +37,22 @@ go build -o ra3d .
 
 Quote magnet links. Without quotes, the shell cuts the link off at the first `&`.
 
-Press `q`, `Esc` or `Ctrl+C` to quit. When the download finishes, ra3d exits on its own and leaves the last screen in your terminal.
+In the TUI:
+
+| Key | Action |
+| --- | --- |
+| `a` | add a torrent: type or paste a path or magnet link, then `Enter` (pasting a link also opens the input) |
+| `↑`/`↓` or `k`/`j` | select a torrent |
+| `p` or `Space` | pause or resume. Pausing drops every peer connection; finished pieces stay on disk |
+| `x` | stop and remove from the list. The files stay, so adding the torrent again resumes it |
+| `d` | stop, remove and delete its files (asks to confirm) |
+| `q` | quit. Progress is kept |
+
+The TUI stays open when downloads finish, so you can keep adding more.
 
 ## The screen
 
-The top of the screen has the torrent name and a progress bar. Below that are the downloaded and total size, the download speed, an estimate of the time left, and the number of connected peers out of all the peers the trackers returned.
+With several torrents, the top of the screen lists them with their progress and speed, and the rest shows the selected one. The detail view has the torrent name and a progress bar. Below that are the downloaded and total size, the download speed, an estimate of the time left, and the number of connected peers out of all the peers the trackers returned.
 
 Under the numbers is a piece map. Each cell stands for a group of pieces and fills in as more of them finish. The bottom line says what the client is doing, for example finding peers, checking existing data or downloading.
 
